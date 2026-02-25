@@ -16,14 +16,23 @@ button{background:#4CAF50;color:white;border:none;cursor:pointer;margin-top:15px
 .task-list{margin-top:20px;}
 .task-item{background:#e9e9ff;padding:12px;margin-bottom:10px;border-radius:8px;font-size:14px;border-left:4px solid #4CAF50;}
 .empty-state{color:#666;text-align:center;padding:20px;font-style:italic;}
-.notification-status{font-size:12px;color:#666;text-align:center;margin-top:5px;}
-@media(max-width:500px){body{padding:10px;}.container{padding:18px;}input,select,textarea,button{font-size:16px;}}
+.status-box{font-size:12px;padding:8px;border-radius:4px;margin-bottom:10px;text-align:center;}
+.status-enabled{background:#d4edda;color:#155724;}
+.status-disabled{background:#f8d7da;color:#721c24;}
+.enable-notif-btn{background:#007bff;margin-bottom:10px;}
 </style>
 </head>
 <body>
 <div class="container">
 <h2>Schedule Maintenance</h2>
-<div class="notification-status" id="notifStatus">Notifications: Checking...</div>
+
+<div id="notifStatus" class="status-box status-disabled">
+🔕 Notifications Disabled - Click below to enable
+</div>
+
+<button id="enableNotifBtn" class="enable-notif-btn" onclick="enableNotifications()">
+🔔 Enable Background Notifications
+</button>
 
 <form id="maintenanceForm">
 <label>Computer Unit</label>
@@ -67,17 +76,68 @@ button{background:#4CAF50;color:white;border:none;cursor:pointer;margin-top:15px
 </div>
 
 <script>
-// Notification Setup
-const notifStatus = document.getElementById("notifStatus");
+// Register Service Worker immediately
+let swRegistration = null;
 
-if("Notification" in window){
-    Notification.requestPermission().then(permission => {
-        notifStatus.textContent = "Notifications: " + permission;
-        notifStatus.style.color = permission === "granted" ? "green" : "orange";
-    });
-} else {
-    notifStatus.textContent = "Notifications: Not supported";
-    notifStatus.style.color = "red";
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+        .then(reg => {
+            console.log('Service Worker registered:', reg);
+            swRegistration = reg;
+            updateNotifStatus();
+        })
+        .catch(err => console.error('SW registration failed:', err));
+}
+
+// Check notification status
+function updateNotifStatus() {
+    const statusDiv = document.getElementById('notifStatus');
+    const btn = document.getElementById('enableNotifBtn');
+    
+    if (Notification.permission === 'granted') {
+        statusDiv.textContent = '🔔 Notifications Enabled - Works even when Chrome is minimized!';
+        statusDiv.className = 'status-box status-enabled';
+        btn.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+        statusDiv.textContent = '❌ Notifications Blocked - Check browser settings';
+        statusDiv.className = 'status-box status-disabled';
+        btn.style.display = 'none';
+    }
+}
+
+// Enable notifications (MUST be triggered by user gesture)
+async function enableNotifications() {
+    if (!('Notification' in window)) {
+        alert('This browser does not support notifications');
+        return;
+    }
+    
+    const permission = await Notification.requestPermission();
+    updateNotifStatus();
+    
+    if (permission === 'granted') {
+        // Send test notification
+        if (swRegistration) {
+            swRegistration.showNotification('✅ Notifications Enabled!', {
+                body: 'You will now receive maintenance alerts even when Chrome is minimized.',
+                icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
+                badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png'
+            });
+        }
+        
+        // Sync schedules with service worker
+        syncWithServiceWorker();
+    }
+}
+
+// Sync data to Service Worker
+function syncWithServiceWorker() {
+    if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: 'SYNC_SCHEDULES',
+            schedules: schedules
+        });
+    }
 }
 
 const form = document.getElementById("maintenanceForm");
@@ -86,55 +146,50 @@ const taskCount = document.getElementById("taskCount");
 
 let schedules = JSON.parse(localStorage.getItem("schedules")) || [];
 
-// Debug: Log what's loaded
-console.log("App started. Schedules:", schedules);
-
 // LOAD SAVED TASKS
 displayTasks();
 
 // SAVE TASK
 form.addEventListener("submit", function(e){
     e.preventDefault();
-    
+
     let computer = document.getElementById("computer").value;
     let date = document.getElementById("date").value;
     let time = document.getElementById("time").value;
     let type = document.getElementById("type").value;
     let technician = document.getElementById("technician").value;
     let notes = document.getElementById("notes").value;
-    
+
     // Conflict Check
     for(let s of schedules){
         if(s.computer === computer && s.date === date && s.time === time){
-            alert("Schedule Conflict! This computer already has maintenance at this time.");
+            alert("Schedule Conflict!");
             return;
         }
     }
-    
+
     let newTask = {
-        id: Date.now(), // Unique ID
+        id: Date.now(),
         computer,
         date,
         time,
         type,
         technician,
         notes,
-        notified: false,
-        created: new Date().toISOString()
+        notified: false
     };
-    
+
     schedules.push(newTask);
     saveAndRefresh();
     form.reset();
     
-    // Visual feedback
-    alert("Task saved successfully!");
+    // Sync with Service Worker for background monitoring
+    syncWithServiceWorker();
 });
 
 function saveAndRefresh(){
     localStorage.setItem("schedules", JSON.stringify(schedules));
     displayTasks();
-    console.log("Saved. Total tasks:", schedules.length);
 }
 
 // DISPLAY TASKS
@@ -148,21 +203,16 @@ function displayTasks(){
     }
     
     taskList.innerHTML = header;
-    
-    // Sort by date/time
     schedules.sort((a,b) => new Date(a.date + "T" + a.time) - new Date(b.date + "T" + b.time));
     
     schedules.forEach((task, index) => {
         let div = document.createElement("div");
         div.className = "task-item";
-        
-        let taskDate = new Date(task.date + "T" + task.time);
-        let isPast = taskDate < new Date();
+        let isPast = new Date(task.date + "T" + task.time) < new Date();
         let statusBadge = isPast ? '<span style="color:red">[OVERDUE]</span>' : '';
-        let notifiedBadge = task.notified ? '<span style="color:green">[NOTIFIED]</span>' : '';
         
         div.innerHTML = `
-            <strong>${task.computer}</strong> ${statusBadge} ${notifiedBadge}<br>
+            <strong>${task.computer}</strong> ${statusBadge}<br>
             <strong>Type:</strong> ${task.type}<br>
             <strong>When:</strong> ${task.date} at ${task.time}<br>
             <strong>Technician:</strong> ${task.technician}<br>
@@ -180,6 +230,7 @@ function deleteTask(index){
     if(confirm("Delete this task?")){
         schedules.splice(index, 1);
         saveAndRefresh();
+        syncWithServiceWorker();
     }
 }
 
@@ -188,36 +239,23 @@ function resetForm(){
     form.reset();
 }
 
-// NOTIFICATION CHECKER - Every 10 seconds (for testing)
-setInterval(function(){
-    let now = new Date();
-    let changes = false;
-    
-    schedules.forEach(task => {
-        let taskTime = new Date(task.date + "T" + task.time);
-        
-        // Notify if within 1 minute past scheduled time and not notified yet
-        if(now >= taskTime && !task.notified && now - taskTime < 60000){
-            if(Notification.permission === "granted"){
-                new Notification("🔧 Maintenance Due!", {
-                    body: `${task.computer} - ${task.type} maintenance is scheduled now`,
-                    icon: "https://cdn-icons-png.flaticon.com/512/3063/3063822.png",
-                    requireInteraction: true
-                });
-            }
+// Listen for messages from Service Worker
+navigator.serviceWorker.addEventListener('message', event => {
+    if (event.data && event.data.type === 'TASK_DUE') {
+        // Refresh display to show notification status
+        const task = schedules.find(t => t.id === event.data.taskId);
+        if (task) {
             task.notified = true;
-            changes = true;
-            console.log("Notification sent for:", task.computer);
+            saveAndRefresh();
         }
-    });
-    
-    if(changes){
-        saveAndRefresh();
     }
-}, 10000); // Check every 10 seconds
+});
 
-// Initial display
-displayTasks();
+// Periodic sync with Service Worker (every 10 seconds)
+setInterval(syncWithServiceWorker, 10000);
+
+// Initial sync
+setTimeout(syncWithServiceWorker, 1000);
 </script>
 </body>
 </html>
