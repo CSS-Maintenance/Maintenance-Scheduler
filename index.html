@@ -4,34 +4,47 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Computer Maintenance Scheduler</title>
+<link rel="manifest" href="/manifest.json">
 <style>
-body{font-family:Arial;background:#f4f4f9;display:flex;justify-content:center;padding:20px;}
+body{font-family:Arial;background:#f4f4f9;display:flex;justify-content:center;padding:20px;margin:0;}
 .container{background:white;padding:25px;border-radius:12px;box-shadow:0 4px 8px rgba(0,0,0,0.1);width:100%;max-width:420px;}
-h2{text-align:center;}
-label{margin-top:10px;display:block;font-weight:bold;}
-input,select,textarea,button{width:100%;padding:10px;margin-top:5px;border-radius:6px;border:1px solid #ccc;font-size:15px;}
-button{background:#4CAF50;color:white;border:none;cursor:pointer;margin-top:15px;}
+h2{text-align:center;color:#333;}
+label{margin-top:10px;display:block;font-weight:bold;color:#555;}
+input,select,textarea,button{width:100%;padding:10px;margin-top:5px;border-radius:6px;border:1px solid #ccc;font-size:15px;box-sizing:border-box;}
+button{background:#4CAF50;color:white;border:none;cursor:pointer;margin-top:15px;font-weight:bold;}
+button:hover{background:#45a049;}
 .cancel{background:#f44336;}
-.deleteBtn{background:#333;margin-top:8px;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;}
+.cancel:hover{background:#da190b;}
+.deleteBtn{background:#333;margin-top:8px;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:auto;}
 .task-list{margin-top:20px;}
 .task-item{background:#e9e9ff;padding:12px;margin-bottom:10px;border-radius:8px;font-size:14px;border-left:4px solid #4CAF50;}
 .empty-state{color:#666;text-align:center;padding:20px;font-style:italic;}
-.status-box{font-size:12px;padding:8px;border-radius:4px;margin-bottom:10px;text-align:center;}
-.status-enabled{background:#d4edda;color:#155724;}
-.status-disabled{background:#f8d7da;color:#721c24;}
+.status-box{font-size:13px;padding:10px;border-radius:4px;margin-bottom:15px;text-align:center;font-weight:bold;}
+.status-enabled{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}
+.status-disabled{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}
+.status-warning{background:#fff3cd;color:#856404;border:1px solid #ffeaa7;}
 .enable-notif-btn{background:#007bff;margin-bottom:10px;}
+.enable-notif-btn:hover{background:#0056b3}
+.ios-instructions{background:#e7f3ff;padding:15px;border-radius:8px;margin-bottom:15px;font-size:13px;display:none;}
 </style>
 </head>
 <body>
 <div class="container">
-<h2>Schedule Maintenance</h2>
+<h2>🔧 Schedule Maintenance</h2>
 
 <div id="notifStatus" class="status-box status-disabled">
-🔕 Notifications Disabled - Click below to enable
+🔕 Notifications Disabled
+</div>
+
+<div id="iosInstructions" class="ios-instructions">
+<strong>📱 iPhone/iPad Users:</strong><br>
+1. Tap Share button (⬆️)<br>
+2. "Add to Home Screen"<br>
+3. Open from Home Screen
 </div>
 
 <button id="enableNotifBtn" class="enable-notif-btn" onclick="enableNotifications()">
-🔔 Enable Background Notifications
+🔔 Enable Notifications
 </button>
 
 <form id="maintenanceForm">
@@ -61,72 +74,214 @@ button{background:#4CAF50;color:white;border:none;cursor:pointer;margin-top:15px
 </select>
 
 <label>Technician</label>
-<input type="text" id="technician" required>
+<input type="text" id="technician" placeholder="Enter name" required>
 
-<label>Notes</label>
-<textarea id="notes"></textarea>
+<label>Notes (Optional)</label>
+<textarea id="notes" rows="3" placeholder="Additional details..."></textarea>
 
-<button type="submit">Save Task</button>
-<button type="button" class="cancel" onclick="resetForm()">Cancel</button>
+<button type="submit">💾 Save Task</button>
+<button type="button" class="cancel" onclick="resetForm()">❌ Cancel</button>
 </form>
 
 <div class="task-list" id="taskList">
-<h3>Upcoming Tasks (<span id="taskCount">0</span>)</h3>
+<h3>📋 Upcoming Tasks (<span id="taskCount">0</span>)</h3>
 </div>
 </div>
 
 <script>
-// Register Service Worker immediately
+// Detect device type
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isAndroid() {
+    return /Android/.test(navigator.userAgent);
+}
+
+function isMobile() {
+    return isIOS() || isAndroid();
+}
+
+function isPWA() {
+    return window.matchMedia('(display-mode: standalone)').matches || 
+           window.navigator.standalone === true;
+}
+
+// Service Worker Registration
 let swRegistration = null;
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js')
         .then(reg => {
-            console.log('Service Worker registered:', reg);
+            console.log('Service Worker registered:', reg.scope);
             swRegistration = reg;
             updateNotifStatus();
         })
-        .catch(err => console.error('SW registration failed:', err));
+        .catch(err => {
+            console.error('SW registration failed:', err);
+            document.getElementById('notifStatus').textContent = '⚠️ Error loading service worker';
+        });
+} else {
+    document.getElementById('notifStatus').textContent = '❌ Browser too old - no service worker support';
 }
 
-// Check notification status
+// Update UI based on device and permission
 function updateNotifStatus() {
     const statusDiv = document.getElementById('notifStatus');
     const btn = document.getElementById('enableNotifBtn');
+    const iosDiv = document.getElementById('iosInstructions');
     
-    if (Notification.permission === 'granted') {
-        statusDiv.textContent = '🔔 Notifications Enabled - Works even when Chrome is minimized!';
-        statusDiv.className = 'status-box status-enabled';
-        btn.style.display = 'none';
-    } else if (Notification.permission === 'denied') {
-        statusDiv.textContent = '❌ Notifications Blocked - Check browser settings';
-        statusDiv.className = 'status-box status-disabled';
-        btn.style.display = 'none';
-    }
-}
-
-// Enable notifications (MUST be triggered by user gesture)
-async function enableNotifications() {
-    if (!('Notification' in window)) {
-        alert('This browser does not support notifications');
+    // iOS specific - not installed as PWA
+    if (isIOS() && !isPWA()) {
+        statusDiv.textContent = '📱 iOS: Install to Home Screen first';
+        statusDiv.className = 'status-box status-warning';
+        btn.textContent = '📲 Show Install Instructions';
+        iosDiv.style.display = 'block';
         return;
     }
     
-    const permission = await Notification.requestPermission();
-    updateNotifStatus();
-    
-    if (permission === 'granted') {
-        // Send test notification
-        if (swRegistration) {
-            swRegistration.showNotification('✅ Notifications Enabled!', {
-                body: 'You will now receive maintenance alerts even when Chrome is minimized.',
-                icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
-                badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png'
-            });
+    // Android specific
+    if (isAndroid()) {
+        iosDiv.style.display = 'none';
+        if (Notification.permission === 'granted') {
+            statusDiv.textContent = '🔔 Android: Notifications Active (works in background!)';
+            statusDiv.className = 'status-box status-enabled';
+            btn.style.display = 'none';
+        } else if (Notification.permission === 'denied') {
+            statusDiv.textContent = '❌ Notifications blocked - check settings';
+            statusDiv.className = 'status-box status-disabled';
+            btn.style.display = 'none';
+        } else {
+            statusDiv.textContent = '🔕 Tap button to enable Android notifications';
+            statusDiv.className = 'status-box status-disabled';
         }
+        return;
+    }
+    
+    // Desktop
+    iosDiv.style.display = 'none';
+    if (Notification.permission === 'granted') {
+        statusDiv.textContent = '🔔 Desktop: Notifications Active (works when minimized!)';
+        statusDiv.className = 'status-box status-enabled';
+        btn.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+        statusDiv.textContent = '❌ Notifications blocked - check browser settings';
+        statusDiv.className = 'status-box status-disabled';
+        btn.style.display = 'none';
+    } else {
+        statusDiv.textContent = '🔕 Click button to enable desktop notifications';
+        statusDiv.className = 'status-box status-disabled';
+    }
+}
+
+// Enable notifications button
+async function enableNotifications() {
+    // iOS not installed
+    if (isIOS() && !isPWA()) {
+        alert('📱 iOS Installation Required\n\n' +
+              'To enable notifications:\n\n' +
+              '1. Tap the Share button (⬆️) in Safari\n' +
+              '2. Scroll down and tap "Add to Home Screen"\n' +
+              '3. Open the app from your Home Screen\n' +
+              ' })
+        .catch(err => {
+            console.error('SW registration failed:', err);
+            document.getElementById('notifStatus').textContent = '⚠️ Error loading service worker';
+        });
+} else {
+    document.getElementById('notifStatus').textContent = '❌ Browser too old - no service worker support';
+}
+
+// Update UI based on device and permission
+function updateNotifStatus() {
+    const statusDiv = document.getElementById('notifStatus');
+    const btn = document.getElementById('enableNotifBtn');
+    const iosDiv = document.getElementById('iosInstructions');
+    
+    // iOS specific - not installed as PWA
+    if (isIOS() && !isPWA()) {
+        statusDiv.textContent = '📱 iOS: Install to Home Screen first';
+        statusDiv.className = 'status-box status-warning';
+        btn.textContent = '📲 Show Install Instructions';
+        iosDiv.style.display = 'block';
+        return;
+    }
+    
+    // Android specific
+    if (isAndroid()) {
+        iosDiv.style.display = 'none';
+        if (Notification.permission === 'granted') {
+            statusDiv.textContent = '🔔 Android: Notifications Active (works in background!)';
+            statusDiv.className = 'status-box status-enabled';
+            btn.style.display = 'none';
+        } else if (Notification.permission === 'denied') {
+            statusDiv.textContent = '❌ Notifications blocked - check settings';
+            statusDiv.className = 'status-box status-disabled';
+            btn.style.display = 'none';
+        } else {
+            statusDiv.textContent = '🔕 Tap button to enable Android notifications';
+            statusDiv.className = 'status-box status-disabled';
+        }
+        return;
+    }
+    
+    // Desktop
+    iosDiv.style.display = 'none';
+    if (Notification.permission === 'granted') {
+        statusDiv.textContent = '🔔 Desktop: Notifications Active (works when minimized!)';
+        statusDiv.className = 'status-box status-enabled';
+        btn.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+        statusDiv.textContent = '❌ Notifications blocked - check browser settings';
+        statusDiv.className = 'status-box status-disabled';
+        btn.style.display = 'none';
+    } else {
+        statusDiv.textContent = '🔕 Click button to enable desktop notifications';
+        statusDiv.className = 'status-box status-disabled';
+    }
+}
+
+// Enable notifications button
+async function enableNotifications() {
+    // iOS not installed
+    if (isIOS() && !isPWA()) {
+        alert('📱 iOS Installation Required\n\n' +
+              'To enable notifications:\n\n' +
+              '1. Tap the Share button (⬆️) in Safari\n' +
+              '2. Scroll down and tap "Add to Home Screen"\n' +
+              '3. Open the app from your Home Screen\n' +
+              '4. Then tap this button again\n\n' +
+              'Also check: Settings > Safari > Advanced > Experimental Features > Notifications');
+        return;
+    }
+    
+    if (!('Notification' in window)) {
+        alert('❌ This browser does not support notifications.\n\nTry Chrome, Edge, or Firefox.');
+        return;
+    }
+    
+    try {
+        const permission = await Notification.requestPermission();
+        updateNotifStatus();
         
-        // Sync schedules with service worker
-        syncWithServiceWorker();
+        if (permission === 'granted') {
+            // Test notification
+            if (swRegistration) {
+                await swRegistration.showNotification('✅ Notifications Enabled!', {
+                    body: isAndroid() ? 'You will receive alerts even when Chrome is closed!' : 'You will receive alerts even when browser is minimized!',
+                    icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
+                    badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png'
+                });
+            }
+            syncWithServiceWorker();
+        } else if (permission === 'denied') {
+            alert('❌ Notifications blocked.\n\nTo enable:\n' + 
+                  (isAndroid() ? 'Chrome ⋮ > Settings > Notifications' : 'Check your browser settings'));
+        }
+    } catch (err) {
+        console.error('Notification error:', err);
+        alert('Error: ' + err.message);
     }
 }
 
@@ -140,16 +295,129 @@ function syncWithServiceWorker() {
     }
 }
 
+// App })
+        .catch(err => {
+            console.error('SW registration failed:', err);
+            document.getElementById('notifStatus').textContent = '⚠️ Error loading service worker';
+        });
+} else {
+    document.getElementById('notifStatus').textContent = '❌ Browser too old - no service worker support';
+}
+
+// Update UI based on device and permission
+function updateNotifStatus() {
+    const statusDiv = document.getElementById('notifStatus');
+    const btn = document.getElementById('enableNotifBtn');
+    const iosDiv = document.getElementById('iosInstructions');
+    
+    // iOS specific - not installed as PWA
+    if (isIOS() && !isPWA()) {
+        statusDiv.textContent = '📱 iOS: Install to Home Screen first';
+        statusDiv.className = 'status-box status-warning';
+        btn.textContent = '📲 Show Install Instructions';
+        iosDiv.style.display = 'block';
+        return;
+    }
+    
+    // Android specific
+    if (isAndroid()) {
+        iosDiv.style.display = 'none';
+        if (Notification.permission === 'granted') {
+            statusDiv.textContent = '🔔 Android: Notifications Active (works in background!)';
+            statusDiv.className = 'status-box status-enabled';
+            btn.style.display = 'none';
+        } else if (Notification.permission === 'denied') {
+            statusDiv.textContent = '❌ Notifications blocked - check settings';
+            statusDiv.className = 'status-box status-disabled';
+            btn.style.display = 'none';
+        } else {
+            statusDiv.textContent = '🔕 Tap button to enable Android notifications';
+            statusDiv.className = 'status-box status-disabled';
+        }
+        return;
+    }
+    
+    // Desktop
+    iosDiv.style.display = 'none';
+    if (Notification.permission === 'granted') {
+        statusDiv.textContent = '🔔 Desktop: Notifications Active (works when minimized!)';
+        statusDiv.className = 'status-box status-enabled';
+        btn.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+        statusDiv.textContent = '❌ Notifications blocked - check browser settings';
+        statusDiv.className = 'status-box status-disabled';
+        btn.style.display = 'none';
+    } else {
+        statusDiv.textContent = '🔕 Click button to enable desktop notifications';
+        statusDiv.className = 'status-box status-disabled';
+    }
+}
+
+// Enable notifications button
+async function enableNotifications() {
+    // iOS not installed
+    if (isIOS() && !isPWA()) {
+        alert('📱 iOS Installation Required\n\n' +
+              'To enable notifications:\n\n' +
+              '1. Tap the Share button (⬆️) in Safari\n' +
+              '2. Scroll down and tap "Add to Home Screen"\n' +
+              '3. Open the app from your Home Screen\n' +
+              '4. Then tap this button again\n\n' +
+              'Also check: Settings > Safari > Advanced > Experimental Features > Notifications');
+        return;
+    }
+    
+    if (!('Notification' in window)) {
+        alert('❌ This browser does not support notifications.\n\nTry Chrome, Edge, or Firefox.');
+        return;
+    }
+    
+    try {
+        const permission = await Notification.requestPermission();
+        updateNotifStatus();
+        
+        if (permission === 'granted') {
+            // Test notification
+            if (swRegistration) {
+                await swRegistration.showNotification('✅ Notifications Enabled!', {
+                    body: isAndroid() ? 'You will receive alerts even when Chrome is closed!' : 'You will receive alerts even when browser is minimized!',
+                    icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
+                    badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png'
+                });
+            }
+            syncWithServiceWorker();
+        } else if (permission === 'denied') {
+            alert('❌ Notifications blocked.\n\nTo enable:\n' + 
+                  (isAndroid() ? 'Chrome ⋮ > Settings > Notifications' : 'Check your browser settings'));
+        }
+    } catch (err) {
+        console.error('Notification error:', err);
+        alert('Error: ' + err.message);
+    }
+}
+
+// Sync data to Service Worker
+function syncWithServiceWorker() {
+    if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: 'SYNC_SCHEDULES',
+            schedules: schedules
+        });
+    }
+}
+
+// App logic
 const form = document.getElementById("maintenanceForm");
 const taskList = document.getElementById("taskList");
 const taskCount = document.getElementById("taskCount");
 
 let schedules = JSON.parse(localStorage.getItem("schedules")) || [];
 
-// LOAD SAVED TASKS
+// Set today's date as minimum
+document.getElementById('date').min = new Date().toISOString().split('T')[0];
+
 displayTasks();
 
-// SAVE TASK
 form.addEventListener("submit", function(e){
     e.preventDefault();
 
@@ -163,7 +431,7 @@ form.addEventListener("submit", function(e){
     // Conflict Check
     for(let s of schedules){
         if(s.computer === computer && s.date === date && s.time === time){
-            alert("Schedule Conflict!");
+            alert("⚠️ Schedule Conflict!\n\nThis computer already has maintenance at this time.");
             return;
         }
     }
@@ -175,7 +443,7 @@ form.addEventListener("submit", function(e){
         time,
         type,
         technician,
-        notes,
+        notes: notes || "",
         notified: false
     };
 
@@ -183,21 +451,22 @@ form.addEventListener("submit", function(e){
     saveAndRefresh();
     form.reset();
     
-    // Sync with Service Worker for background monitoring
-    syncWithServiceWorker();
+    // Show success message
+    const msg = isMobile() ? 'Task saved! You will be notified.' : 'Task saved successfully!';
+    alert('✅ ' + msg);
 });
 
 function saveAndRefresh(){
     localStorage.setItem("schedules", JSON.stringify(schedules));
     displayTasks();
+    syncWithServiceWorker();
 }
 
-// DISPLAY TASKS
 function displayTasks(){
-    const header = "<h3>Upcoming Tasks (" + schedules.length + ")</h3>";
+    const header = "<h3>📋 Upcoming Tasks (" + schedules.length + ")</h3>";
     
     if(schedules.length === 0){
-        taskList.innerHTML = header + '<div class="empty-state">No tasks scheduled. Add one above!</div>';
+        taskList.innerHTML = header + '<div class="empty-state">No tasks scheduled.<br>Add your first maintenance task above!</div>';
         taskCount.textContent = "0";
         return;
     }
@@ -205,19 +474,28 @@ function displayTasks(){
     taskList.innerHTML = header;
     schedules.sort((a,b) => new Date(a.date + "T" + a.time) - new Date(b.date + "T" + b.time));
     
+    const now = new Date();
+    
     schedules.forEach((task, index) => {
         let div = document.createElement("div");
         div.className = "task-item";
-        let isPast = new Date(task.date + "T" + task.time) < new Date();
-        let statusBadge = isPast ? '<span style="color:red">[OVERDUE]</span>' : '';
+        
+        let taskDateTime = new Date(task.date + "T" + task.time);
+        let isPast = taskDateTime < now;
+        let isSoon = !isPast && (taskDateTime - now < 3600000); // Within 1 hour
+        
+        let statusBadge = "";
+        if (isPast) statusBadge = ' <span style="color:red">[OVERDUE]</span>';
+        else if (isSoon) statusBadge = ' <span style="color:orange">[SOON]</span>';
+        if (task.notified) statusBadge += ' <span style="color:green">[NOTIFIED]</span>';
         
         div.innerHTML = `
-            <strong>${task.computer}</strong> ${statusBadge}<br>
+            <strong>${task.computer}</strong>${statusBadge}<br>
             <strong>Type:</strong> ${task.type}<br>
             <strong>When:</strong> ${task.date} at ${task.time}<br>
             <strong>Technician:</strong> ${task.technician}<br>
             ${task.notes ? `<strong>Notes:</strong> ${task.notes}<br>` : ''}
-            <button class="deleteBtn" onclick="deleteTask(${index})">Delete</button>
+            <button class="deleteBtn" onclick="deleteTask(${index})">🗑️ Delete</button>
         `;
         taskList.appendChild(div);
     });
@@ -225,16 +503,13 @@ function displayTasks(){
     taskCount.textContent = schedules.length;
 }
 
-// DELETE TASK
 function deleteTask(index){
-    if(confirm("Delete this task?")){
+    if(confirm("Delete this maintenance task?")){
         schedules.splice(index, 1);
         saveAndRefresh();
-        syncWithServiceWorker();
     }
 }
 
-// RESET FORM
 function resetForm(){
     form.reset();
 }
@@ -242,7 +517,6 @@ function resetForm(){
 // Listen for messages from Service Worker
 navigator.serviceWorker.addEventListener('message', event => {
     if (event.data && event.data.type === 'TASK_DUE') {
-        // Refresh display to show notification status
         const task = schedules.find(t => t.id === event.data.taskId);
         if (task) {
             task.notified = true;
@@ -251,11 +525,11 @@ navigator.serviceWorker.addEventListener('message', event => {
     }
 });
 
-// Periodic sync with Service Worker (every 10 seconds)
+// Periodic sync
 setInterval(syncWithServiceWorker, 10000);
 
-// Initial sync
-setTimeout(syncWithServiceWorker, 1000);
+// Initial status check
+setTimeout(updateNotifStatus, 500);
 </script>
 </body>
 </html>
