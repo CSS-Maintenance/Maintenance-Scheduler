@@ -1,91 +1,60 @@
-// Service Worker - Works on Desktop & Android
-// iOS support limited (requires PWA install)
-
-const CACHE_NAME = 'maint-scheduler-v1';
+const CACHE_NAME = 'maint-sched-v1';
+const urlsToCache = [
+  '/',
+  '/manifest.json'
+];
 
 self.addEventListener('install', event => {
-    console.log('Service Worker installing...');
-    self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(urlsToCache))
+  );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
-    console.log('Service Worker activating...');
-    event.waitUntil(self.clients.claim());
+  event.waitUntil(self.clients.claim());
 });
 
-// Store schedules
-let swSchedules = [];
+let schedules = [];
 
 self.addEventListener('message', event => {
-    if (event.data && event.data.type === 'SYNC_SCHEDULES') {
-        swSchedules = event.data.schedules;
-        console.log('Schedules synced:', swSchedules.length);
-    }
+  if (event.data && event.data.type === 'SYNC_SCHEDULES') {
+    schedules = event.data.schedules || [];
+    checkSchedules();
+  }
 });
-
-// Check every 30 seconds
-setInterval(checkSchedules, 30000);
 
 function checkSchedules() {
-    const now = new Date();
+  const now = new Date();
+  
+  schedules.forEach(task => {
+    if (task.notified) return;
     
-    swSchedules.forEach(task => {
-        const taskTime = new Date(task.date + 'T' + task.time);
-        
-        // Notify if due (within last 2 minutes) and not notified
-        if (now >= taskTime && !task.notified && (now - taskTime < 120000)) {
-            showNotification(task);
-        }
-    });
-}
-
-function showNotification(task) {
-    const options = {
-        body: `${task.computer} needs ${task.type}\nTechnician: ${task.technician}`,
+    const taskTime = new Date(task.date + 'T' + task.time);
+    const diff = taskTime - now;
+    
+    // Notify if task is due within 5 minutes or past due
+    if (diff <= 300000 && diff > -3600000) {
+      self.registration.showNotification('🔧 Maintenance Due!', {
+        body: `${task.computer} - ${task.type} at ${task.time}`,
         icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
         badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
-        tag: task.id,
-        requireInteraction: true,
-        actions: [
-            {action: 'open', title: 'Open App'},
-            {action: 'dismiss', title: 'Dismiss'}
-        ],
-        data: {taskId: task.id, url: self.location.origin}
-    };
-    
-    self.registration.showNotification('🔧 Maintenance Due!', options)
-        .then(() => {
-            console.log('Notification sent for:', task.computer);
-            task.notified = true;
-            notifyClients(task.id);
-        })
-        .catch(err => console.error('Notification failed:', err));
-}
-
-function notifyClients(taskId) {
-    self.clients.matchAll().then(clients => {
+        data: { taskId: task.id }
+      });
+      
+      // Notify main thread
+      self.clients.matchAll().then(clients => {
         clients.forEach(client => {
-            client.postMessage({type: 'TASK_DUE', taskId: taskId});
+          client.postMessage({
+            type: 'TASK_DUE',
+            taskId: task.id
+          });
         });
-    });
+      });
+    }
+  });
 }
 
-self.addEventListener('notificationclick', event => {
-    event.notification.close();
-    const url = event.notification.data.url;
-    
-    if (event.action === 'open' || !event.action) {
-        event.waitUntil(
-            self.clients.matchAll({type: 'window'}).then(clients => {
-                for (let client of clients) {
-                    if (client.url.includes(url) && 'focus' in client) {
-                        return client.focus();
-                    }
-                }
-                if (self.clients.openWindow) {
-                    return self.clients.openWindow(url);
-                }
-            })
-        );
-    }
-});
+// Check every minute
+setInterval(checkSchedules, 60000);
